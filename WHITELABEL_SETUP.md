@@ -1,7 +1,10 @@
 # Whitelabel Fullstack — Guia de Setup
 
-> Documento de referência para criar e personalizar um fork deste projeto.  
-> Stack: React (Web) · React Native + Expo (Mobile) · Java Spring Boot (Backend) · Supabase (Auth)
+> Guia legado de bootstrap e personalização de fork.  
+> **Documentação canônica (atualizada):** [ARCHITECTURE.md](ARCHITECTURE.md) · env mestre: `.env.master` + `scripts/sync-env-from-master.sh`  
+> Stack: React (Web) · React Native (Mobile) · Java Spring Boot (Backend) · Supabase (Auth)
+
+**Modelo:** um fork = um deploy (Supabase + Postgres + env). **Não há multi-tenant** no código (`X-Tenant-ID`, tabela `tenants` e claim `tenant_id` foram removidos).
 
 ---
 
@@ -31,7 +34,7 @@
            ▼              ▼              ▼
    ┌──────────────┐ ┌───────────┐ ┌──────────────────┐
    │ Auth Service │ │   Core    │ │    Notification  │
-   │ :8081        │ │  Service  │ │    Service       │
+   │ :8084        │ │  Service  │ │    Service       │
    │              │ │  :8082    │ │    :8083         │
    └──────┬───────┘ └─────┬─────┘ └────────┬─────────┘
           │               │                │
@@ -51,6 +54,7 @@ de forma independente. Os frontends ficam juntos por compartilharem componentes 
 
 ```
 github.com/<org>/
+├── whitelabel-docs           ← ARCHITECTURE.md, .env.master, scripts de sync
 ├── whitelabel-clients        ← monorepo: Web + Mobile + Admin
 ├── whitelabel-gateway        ← API Gateway (Spring Cloud Gateway)
 ├── whitelabel-auth-service   ← Auth Service (Spring Boot)
@@ -182,7 +186,6 @@ VITE_SUPABASE_ANON_KEY=sb_publishable_<sua-chave>   # Project Settings → API K
 VITE_API_GATEWAY_URL=http://localhost:8080
 VITE_APP_NAME=Minha Aplicação
 VITE_APP_LOGO_URL=/logo.svg
-VITE_TENANT_ID=meu-tenant
 ```
 
 ---
@@ -252,11 +255,11 @@ const styles = StyleSheet.create({
 #### Variáveis de ambiente (`apps/mobile/.env.example`)
 
 ```env
-EXPO_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_<sua-chave>   # Project Settings → API Keys
-EXPO_PUBLIC_API_GATEWAY_URL=http://localhost:8080
-EXPO_PUBLIC_APP_NAME=Minha Aplicação
-EXPO_PUBLIC_TENANT_ID=meu-tenant
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_ANON_KEY=sb_publishable_<sua-chave>
+API_GATEWAY_URL=http://localhost:8080
+APP_NAME=Minha Aplicação
+APP_VERSION=1.0.0
 ```
 
 ---
@@ -270,9 +273,8 @@ apps/admin/
 ├── src/
 │   ├── features/
 │   │   ├── auth/
-│   │   ├── tenants/                ← CRUD de tenants
-│   │   ├── users/                  ← gestão de usuários
-│   │   └── features-flags/         ← gerenciar feature flags por tenant
+│   │   ├── users/                  ← gestão de usuários (superadmin)
+│   │   └── features-flags/         ← feature flags do deploy (futuro)
 │   ├── pages/
 │   │   └── DashboardPage.tsx
 │   └── lib/
@@ -304,11 +306,12 @@ whitelabel-gateway/
 │   │   ├── GatewayApplication.java
 │   │   ├── config/
 │   │   │   ├── RouteConfig.java         ← definição das rotas
-│   │   │   ├── RateLimitConfig.java     ← rate limiting por IP/tenant
+│   │   │   ├── RateLimitConfig.java     ← rate limiting por IP
 │   │   │   └── CorsConfig.java
 │   │   └── filter/
+│   │       ├── CorrelationIdFilter.java ← X-Request-Id / X-Trace-Id
 │   │       ├── JwtRelayFilter.java      ← propaga Authorization header
-│   │       └── TenantResolutionFilter.java ← resolve tenant pelo host/header
+│   │       └── GatewayAccessLogFilter.java
 │   └── resources/
 │       └── application.yml
 ├── pom.xml
@@ -319,17 +322,17 @@ whitelabel-gateway/
 
 | Prefixo            | Serviço destino          | Porta |
 |--------------------|--------------------------|-------|
-| `/auth/**`         | whitelabel-auth-service  | 8081  |
+| `/auth/**`         | whitelabel-auth-service  | 8084  |
 | `/v1/**`           | whitelabel-core-service  | 8082  |
-| `/notifications/**`| whitelabel-notify-service| 8083  |
-| `/health`          | próprio gateway          | 8080  |
+| `/actuator/health` | próprio gateway          | 8080  |
+
+> **Notify** não é exposto no gateway — apenas rede interna + `X-Internal-Api-Key`.
 
 ### Variáveis de ambiente (`.env.example`)
 
 ```env
-AUTH_SERVICE_URL=http://localhost:8081
+AUTH_SERVICE_URL=http://localhost:8084
 CORE_SERVICE_URL=http://localhost:8082
-NOTIFY_SERVICE_URL=http://localhost:8083
 
 # JWT assimétrico (RS256) — projetos novos no Supabase (após out/2025)
 SUPABASE_JWKS_URL=https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json
@@ -399,8 +402,8 @@ SERVER_PORT=8084
 
 ## Repositório 4 — `whitelabel-core-service`
 
-Coração da aplicação. Contém as regras de negócio, multitenancy, perfis de usuário
-e feature flags. Novos domínios do produto são adicionados aqui após o fork.
+Coração da aplicação: perfil, branding via env (`GET /v1/app/config`), feature flags
+globais do deploy e auditoria admin. Novos domínios do produto são adicionados aqui após o fork.
 
 ```
 whitelabel-core-service/
@@ -419,17 +422,13 @@ whitelabel-core-service/
 │   │   │   │   ├── User.java
 │   │   │   │   ├── UserRepository.java
 │   │   │   │   └── UserService.java
-│   │   │   ├── tenant/
-│   │   │   │   ├── Tenant.java
-│   │   │   │   ├── TenantRepository.java
-│   │   │   │   └── TenantService.java
 │   │   │   └── feature/
 │   │   │       ├── FeatureFlag.java
 │   │   │       ├── FeatureFlagRepository.java
 │   │   │       └── FeatureFlagService.java
 │   │   ├── api/
 │   │   │   ├── UserController.java         ← GET/PUT /v1/me
-│   │   │   ├── TenantController.java       ← GET /v1/tenant/config
+│   │   │   ├── AppConfigController.java    ← GET /v1/app/config (público)
 │   │   │   ├── FeatureController.java      ← GET /v1/features
 │   │   │   └── HealthController.java       ← GET /health
 │   │   └── shared/
@@ -441,8 +440,8 @@ whitelabel-core-service/
 │       ├── application.yml
 │       └── db/migration/
 │           ├── V1__create_users.sql
-│           ├── V2__create_tenants.sql
-│           └── V3__create_feature_flags.sql
+│           ├── V3__create_feature_flags.sql
+│           └── V8__remove_multitenant.sql   ← fork existente: drop tenants/tenant_id
 ├── pom.xml
 └── .env.example
 ```
@@ -454,8 +453,8 @@ whitelabel-core-service/
 | GET    | `/health`          | Pública      | Status do serviço                |
 | GET    | `/v1/me`           | JWT          | Perfil do usuário logado         |
 | PUT    | `/v1/me`           | JWT          | Atualiza perfil                  |
-| GET    | `/v1/tenant/config`| JWT          | Tema, logo, flags do tenant      |
-| GET    | `/v1/features`     | JWT          | Feature flags ativas por usuário |
+| GET    | `/v1/app/config`   | Pública      | Nome, logo, cor (env `APP_*`)    |
+| GET    | `/v1/features`     | JWT          | Feature flags ativas do deploy   |
 
 ### Expandindo após o fork
 
@@ -464,8 +463,8 @@ Novos módulos de produto entram como novos packages em `domain/`:
 ```
 domain/
 ├── user/         ← já vem no template
-├── tenant/       ← já vem no template
 ├── feature/      ← já vem no template
+├── audit/        ← auditoria admin
 ├── order/        ← você adiciona para e-commerce
 ├── appointment/  ← você adiciona para agenda
 └── product/      ← você adiciona para catálogo
@@ -485,7 +484,9 @@ DB_PASSWORD=postgres
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-APP_TENANT_ID=meu-tenant
+APP_NAME=Minha Aplicação
+APP_LOGO_URL=/logo.svg
+APP_PRIMARY_COLOR=#2563eb
 SERVER_PORT=8082
 ```
 
@@ -689,15 +690,15 @@ Frontend armazena JWT em memória / SecureStore (mobile)
   ├─ 3. Requisição → Authorization: Bearer <jwt>
   ▼
 API Gateway (:8080)
-  ├─ 4. TenantResolutionFilter → identifica tenant pelo host ou header X-Tenant-ID
+  ├─ 4. CorrelationIdFilter → gera/propaga X-Request-Id e X-Trace-Id
   ├─ 5. JwtRelayFilter → propaga Authorization para o serviço destino
   ├─ 6. Roteia para o serviço correto por prefixo de rota
   ▼
-Serviço (Auth / Core / Notify)
+Serviço (Auth / Core / Notify interno)
   ├─ 7. JwtAuthFilter → busca chave pública no JWKS endpoint (cache local)
   ├─ 8. Verifica assinatura RS256 com a chave pública — sem chamar o Supabase
   ├─ 9. Valida issuer, expiração e claims
-  ├─ 10. Extrai sub (UUID Supabase) e tenant_id dos claims
+  ├─ 10. Extrai sub (UUID Supabase) para o contexto de segurança
   ├─ 11. Executa lógica de negócio
   ▼
 PostgreSQL / Redis
@@ -762,10 +763,6 @@ public class SupabaseJwtUtil {
 
     public String extractSubject(DecodedJWT jwt) {
         return jwt.getSubject();   // UUID do usuário no Supabase
-    }
-
-    public String extractTenantId(DecodedJWT jwt) {
-        return jwt.getClaim("tenant_id").asString();
     }
 }
 ```
@@ -921,11 +918,12 @@ pnpm dev
 - [ ] Ajustar `DB_URL` nos envs de staging e produção
 - [ ] Rodar migrations: `docker compose exec core-service mvn flyway:migrate`
 
-### Identidade do tenant
+### Branding do fork (sem multi-tenant)
 
-- [ ] Definir `APP_TENANT_ID` nos envs dos serviços
-- [ ] Inserir registro na tabela `tenants` (nome, logo_url, cor primária)
-- [ ] Ajustar `VITE_APP_NAME` / `EXPO_PUBLIC_APP_NAME`
+- [ ] Preencher `.env.master` em `whitelabel-docs` e rodar `./scripts/sync-env-from-master.sh`
+- [ ] Definir `APP_NAME`, `APP_LOGO_URL`, `APP_PRIMARY_COLOR` (core + clients)
+- [ ] Validar `GET http://localhost:8080/v1/app/config` (público)
+- [ ] Ajustar `VITE_APP_NAME` / `APP_NAME` (mobile)
 
 ### Notificações
 

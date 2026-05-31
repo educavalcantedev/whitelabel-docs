@@ -6,7 +6,9 @@ Documentação central e scripts de desenvolvimento do monorepo Whitelabel.
 
 **[ARCHITECTURE.md](ARCHITECTURE.md)** — arquitetura, fluxos, portas, segurança, observabilidade e onde expandir o sistema.
 
-Guia legado de setup inicial: [WHITELABEL_SETUP.md](WHITELABEL_SETUP.md).
+Cada fork = **um deploy** (env + Supabase + infra), sem multi-tenant na aplicação. Branding: `APP_NAME`, `APP_LOGO_URL`, `APP_PRIMARY_COLOR` → `GET /v1/app/config`.
+
+Guia legado de setup inicial (atualizado): [WHITELABEL_SETUP.md](WHITELABEL_SETUP.md).
 
 ## Layout local recomendado
 
@@ -57,7 +59,7 @@ Para outro layout, defina `WHITELABEL_MONOREPO_ROOT` apontando para a pasta que 
 ## Quick start (dev)
 
 ```bash
-cd ../whitelabel-infra/docker && docker compose up -d
+cd ../whitelabel-infra/docker && docker compose up -d --build
 cd ../whitelabel-clients && pnpm install && pnpm dev
 ```
 

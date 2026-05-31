@@ -2,7 +2,7 @@
 
 Documento vivo da plataforma. Atualize este arquivo quando houver mudanças relevantes em serviços, rotas, segurança ou fluxos.
 
-**Última revisão:** 2026-05-31
+**Última revisão:** 2026-05-29
 
 ---
 
@@ -61,6 +61,16 @@ flowchart TB
   GW -. logs .-> Promtail
   Notify -. logs .-> Promtail
 ```
+
+### Modelo whitelabel (sem multi-tenant)
+
+Não há isolamento de vários clientes no mesmo banco ou API. Cada **fork** do template recebe:
+
+- Um projeto **Supabase**, um **Postgres** e variáveis em `.env.master` (`APP_NAME`, `APP_LOGO_URL`, `APP_PRIMARY_COLOR`, etc.).
+- Branding exposto em `GET /v1/app/config` (público) e nos apps via `VITE_APP_*` / `APP_NAME` (mobile).
+- **Feature flags** globais do deploy (tabela `feature_flags` sem `tenant_id`).
+
+Não use `X-Tenant-ID`, claim `tenant_id` no JWT nem tabela `tenants` — foram removidos (Flyway auth **V7**, core **V8**).
 
 ---
 
@@ -369,7 +379,10 @@ Instâncias lógicas no mesmo Postgres (dev):
 
 Flyway em cada serviço (`src/main/resources/db/migration/`).
 
-**Nota:** Tabelas de device foram **movidas do notify para o auth**; notify mantém apenas `V1__create_notifications.sql`.
+**Notas:**
+
+- Devices ficam no **auth**; notify só persiste entregas (`V1__create_notifications.sql`).
+- Após pull com remoção de multi-tenant: suba os serviços com `docker compose up -d --build` para aplicar **V7** (auth) e **V8** (core).
 
 ---
 
@@ -486,6 +499,7 @@ Use `whitelabel-docs/scripts/sync-env-from-master.sh` (a partir de `whitelabel-d
 | 2026-05-31 | READMEs atualizados e linkados; porta auth 8084; app web README |
 | 2026-05-31 | Repositório `whitelabel-docs` com arquitetura, env mestre e scripts |
 | 2026-05-31 | Removida camada multi-tenant; branding por env; `GET /v1/app/config` |
+| 2026-05-29 | Seção modelo whitelabel; links README; WHITELABEL_SETUP.md; Flyway V7/V8 |
 
 ---
 
