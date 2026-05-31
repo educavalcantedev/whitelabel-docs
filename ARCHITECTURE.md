@@ -8,7 +8,7 @@ Documento vivo da plataforma. Atualize este arquivo quando houver mudanças rele
 
 ## Visão geral
 
-Plataforma **multitenant** com autenticação delegada ao **Supabase** (JWT). O backend é composto por microsserviços Java (Spring Boot) atrás de um **API Gateway**. Clientes (web, mobile, admin) falam apenas com o gateway na porta **8080**. O serviço de notificações é **interno** (sem rota pública no gateway).
+Plataforma **whitelabel** (um deploy por fork/cliente) com autenticação delegada ao **Supabase** (JWT). O backend é composto por microsserviços Java (Spring Boot) atrás de um **API Gateway**. Clientes (web, mobile, admin) falam apenas com o gateway na porta **8080**. O serviço de notificações é **interno** (sem rota pública no gateway).
 
 ```mermaid
 flowchart TB
@@ -70,7 +70,7 @@ flowchart TB
 |-------|------------------|
 | `whitelabel-gateway` | Entrada única HTTP, roteamento, CORS, rate limit, correlation ID |
 | `whitelabel-auth-service` | Identidade local, dispositivos, web access, admin de identidades |
-| `whitelabel-core-service` | Perfil, tenant, feature flags, admin de usuários, auditoria |
+| `whitelabel-core-service` | Perfil, app config, feature flags, admin de usuários, auditoria |
 | `whitelabel-notify-service` | Entrega de e-mail, push (FCM), SMS |
 | `whitelabel-clients` | Monorepo Turborepo: `web`, `mobile`, `admin`, pacotes compartilhados |
 | `whitelabel-infra` | Docker Compose, K8s (Kustomize), Terraform |
@@ -84,7 +84,7 @@ flowchart TB
 ### Modelo
 
 1. O cliente autentica no **Supabase** (`signIn`, `signUp`) e obtém `access_token` (JWT).
-2. Chamadas à API passam `Authorization: Bearer <jwt>` e `X-Tenant-ID`.
+2. Chamadas à API passam `Authorization: Bearer <jwt>`.
 3. **Gateway** repassa o JWT e injeta/propaga `X-Request-Id` / `X-Trace-Id`.
 4. **auth-service** e **core-service** validam o JWT contra as chaves JWKS do Supabase.
 5. Rotas **internas** (`/internal/**`) usam `X-Internal-Api-Key` (sem JWT de usuário).
@@ -121,7 +121,7 @@ O auth e o core mantêm cópias coerentes do usuário; bloqueio é sincronizado 
 | Prefixo | Destino | Descrição |
 |---------|---------|-----------|
 | `/auth/**` | auth-service | Identidade, devices, web-access, admin auth |
-| `/v1/**` | core-service | Perfil, tenant, features, admin core |
+| `/v1/**` | core-service | Perfil, app config, features, admin core |
 | `/actuator/health` | gateway | Health do gateway |
 
 **Não exposto:** `/notifications/**` → notify-service (somente rede Docker).
@@ -131,7 +131,6 @@ O auth e o core mantêm cópias coerentes do usuário; bloqueio é sincronizado 
 | Filtro | Função |
 |--------|--------|
 | `CorrelationIdFilter` | Gera ou propaga `X-Request-Id` / `X-Trace-Id`; define header na resposta via `beforeCommit` |
-| `TenantResolutionFilter` | Garante header `X-Tenant-ID` |
 | `JwtRelayFilter` | Repassa `Authorization` ao backend |
 
 ### CORS (dev)
@@ -220,15 +219,15 @@ sequenceDiagram
 
 **Porta:** 8082 · **Banco:** `whitelabel_core` · **Cache:** Redis
 
-Coração de **negócio multitenant**: perfil, tenant, feature flags, admin e **auditoria**.
+Coração de **negócio**: perfil, config do app (env), feature flags globais do deploy, admin e **auditoria**.
 
 ### Domínios
 
 | Domínio | Descrição |
 |---------|-----------|
 | User | Perfil do usuário (`users`) |
-| Tenant | Configuração visual e flags por tenant |
-| Feature flags | Funcionalidades habilitadas |
+| App config | Branding via `APP_NAME`, `APP_LOGO_URL`, `APP_PRIMARY_COLOR` |
+| Feature flags | Funcionalidades habilitadas por deploy |
 | Audit | `audit_logs` — ações administrativas (`@Auditable`) |
 
 ### Endpoints (via gateway)
@@ -238,7 +237,7 @@ Coração de **negócio multitenant**: perfil, tenant, feature flags, admin e **
 | GET | `/health` | Pública | Health |
 | GET | `/v1/me` | JWT | Perfil |
 | PUT | `/v1/me` | JWT | Atualiza perfil |
-| GET | `/v1/tenant/config` | JWT | Tema, logo, config do tenant |
+| GET | `/v1/app/config` | Pública | Nome, logo, cor primária (env) |
 | GET | `/v1/features` | JWT | Feature flags ativas |
 | GET | `/v1/admin/users` | JWT superadmin | Lista usuários |
 | POST | `/v1/admin/users/{id}/block` | JWT superadmin | Bloqueia |
@@ -309,7 +308,7 @@ Monorepo **pnpm + Turborepo**.
 ### Comunicação com API
 
 - **Base URL:** `API_GATEWAY_URL` / `VITE_API_GATEWAY_URL` → `http://localhost:8080` (dev).
-- **Headers:** `Authorization`, `X-Tenant-ID`, `X-Request-Id` (UUID por requisição).
+- **Headers:** `Authorization`, `X-Request-Id` (UUID por requisição).
 - **Dev web/admin:** Vite proxy `/auth` e `/v1` → gateway (evita CORS).
 - **Mobile físico:** usar IP da máquina, não `localhost`, no `.env`.
 
@@ -365,7 +364,7 @@ Instâncias lógicas no mesmo Postgres (dev):
 | Database | Serviço | Migrações principais |
 |----------|---------|----------------------|
 | `whitelabel_auth` | auth | identities, web_access, devices, challenges |
-| `whitelabel_core` | core | users, tenants, feature_flags, audit_logs |
+| `whitelabel_core` | core | users, feature_flags, audit_logs |
 | `whitelabel_notify` | notify | notifications (entregas) |
 
 Flyway em cada serviço (`src/main/resources/db/migration/`).
@@ -457,7 +456,7 @@ pnpm dev
 | `SUPABASE_URL` / `SUPABASE_JWT_SECRET` | auth, core, clients | Auth Supabase |
 | `NOTIFY_SERVICE_URL` | auth | `http://notify-service:8083` no Docker |
 | `API_GATEWAY_URL` | clients | URL do gateway para apps |
-| `TENANT_ID` / `X-Tenant-ID` | clients, APIs | Tenant atual |
+| `APP_NAME`, `APP_LOGO_URL`, `APP_PRIMARY_COLOR` | core, clients | Branding do fork |
 | `MAILJET_*` / `EMAIL_*` | notify | Envio de e-mail |
 | `FIREBASE_CREDENTIALS_PATH` | notify | Push FCM |
 | `SPRING_PROFILES_ACTIVE` | serviços Java | `local,observability` no Docker |
@@ -486,6 +485,7 @@ Use `whitelabel-docs/scripts/sync-env-from-master.sh` (a partir de `whitelabel-d
 | 2026-05-31 | Documento inicial: arquitetura completa, serviços, fluxos, observabilidade, segurança |
 | 2026-05-31 | READMEs atualizados e linkados; porta auth 8084; app web README |
 | 2026-05-31 | Repositório `whitelabel-docs` com arquitetura, env mestre e scripts |
+| 2026-05-31 | Removida camada multi-tenant; branding por env; `GET /v1/app/config` |
 
 ---
 
@@ -499,7 +499,7 @@ Use `whitelabel-docs/scripts/sync-env-from-master.sh` (a partir de `whitelabel-d
 | [whitelabel-clients](https://github.com/educavalcantedev/whitelabel-clients/blob/main/README.md) | Monorepo, apps, headers, debug |
 | [whitelabel-gateway](https://github.com/educavalcantedev/whitelabel-gateway/blob/main/README.md) | Rotas e filtros do gateway |
 | [whitelabel-auth-service](https://github.com/educavalcantedev/whitelabel-auth-service/blob/main/README.md) | Identidade, devices, admin auth |
-| [whitelabel-core-service](https://github.com/educavalcantedev/whitelabel-core-service/blob/main/README.md) | Perfil, tenant, features, auditoria |
+| [whitelabel-core-service](https://github.com/educavalcantedev/whitelabel-core-service/blob/main/README.md) | Perfil, app config, features, auditoria |
 | [whitelabel-notify-service](https://github.com/educavalcantedev/whitelabel-notify-service/blob/main/README.md) | E-mail, push, SMS |
 | [apps/web](https://github.com/educavalcantedev/whitelabel-clients/blob/main/apps/web/README.md) | App web |
 | [apps/admin](https://github.com/educavalcantedev/whitelabel-clients/blob/main/apps/admin/README.md) | Painel superadmin |
